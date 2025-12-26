@@ -9,15 +9,15 @@
     "start": "next start",
     "lint": "next lint",
     "compile": "hardhat compile",
-    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:sepolia": "node scripts/deploy-simple.js",
     "verify": "hardhat verify --network sepolia"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.0.0",
+    "@zama-fhe/relayer-sdk": "^0.3.0-6",
     "autoprefixer": "^10.4.16",
     "clsx": "^2.0.0",
     "connectkit": "^1.7.0",
-    "fhevmjs": "^0.2.0",
     "lucide-react": "^0.294.0",
     "next": "^14.0.0",
     "postcss": "^8.4.31",

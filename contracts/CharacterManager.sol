@@ -1,48 +1,43 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// Forward declaration
+// Gallery contract interface - we call it to add/remove characters from public gallery
 interface IGalleryManager {
     function addToGallery(uint256 characterId) external;
     function removeFromGallery(uint256 characterId) external;
 }
 
-/**
- * @title CharacterManager
- * @dev Manages character creation, editing, and storage
- * Note: In production, character parts should be encrypted using FHEVM
- * For now, we store them as uint32, but the structure supports FHE encryption
- */
+// Character manager - stores pixel characters with FHE encryption
+// All visual parts are encrypted, only the name is public
 contract CharacterManager {
-    // Character structure
-    // In production with FHEVM, these would be euint32 (encrypted uint32)
+    // Character structure - all parts encrypted with FHE
     struct Character {
-        uint32 head;       // Head ID (should be encrypted with FHE in production)
-        uint32 eyes;       // Eyes ID (should be encrypted with FHE in production)
-        uint32 mouth;      // Mouth ID (should be encrypted with FHE in production)
-        uint32 body;       // Body ID (should be encrypted with FHE in production)
-        uint32 hat;        // Hat ID (should be encrypted with FHE in production)
-        uint32 accessory;  // Accessory ID (should be encrypted with FHE in production)
-        string name;       // Character name (public)
-        address owner;     // Character owner
-        uint256 createdAt; // Creation timestamp
-        uint256 updatedAt; // Last update timestamp
-        bool isPublic;     // Whether character is public
+        bytes32 encryptedHead;      // Encrypted head (you can't see what it actually is until decrypted)
+        bytes32 encryptedEyes;      // Encrypted eyes
+        bytes32 encryptedMouth;     // Encrypted mouth
+        bytes32 encryptedBody;      // Encrypted body
+        bytes32 encryptedHat;       // Encrypted hat (yes, even hats get encrypted!)
+        bytes32 encryptedAccessory; // Encrypted accessory
+        string name;                // Character name - this is public, no need to encrypt
+        address owner;              // Who owns this character
+        uint256 createdAt;          // When it was created
+        uint256 updatedAt;          // Last update timestamp
+        bool isPublic;              // Public or private
     }
 
-    // Mapping from character ID to Character
+    // Storage for all characters by ID
     mapping(uint256 => Character) public characters;
     
-    // Mapping from owner to their character IDs
+    // List of character IDs for each owner
     mapping(address => uint256[]) public ownerCharacters;
     
-    // Total character count
+    // Total number of characters created
     uint256 public totalCharacters;
     
-    // Character ID counter
+    // Counter for generating new character IDs
     uint256 private _characterIdCounter;
 
-    // Events
+    // Events for tracking what's happening
     event CharacterCreated(
         uint256 indexed characterId,
         address indexed owner,
@@ -65,39 +60,39 @@ contract CharacterManager {
         string newName
     );
 
-    /**
-     * @dev Create a new character
-     * @param name Character name
-     * @param head Head ID (uint32 for now, should be euint32 with FHE)
-     * @param eyes Eyes ID
-     * @param mouth Mouth ID
-     * @param body Body ID
-     * @param hat Hat ID
-     * @param accessory Accessory ID
-     * @param isPublic Whether to publish to gallery
-     * @return characterId The ID of the created character
-     */
+    // Create a new character - all parts must already be encrypted with FHE
+    // We only accept encrypted data, no plaintext!
     function createCharacter(
         string memory name,
-        uint32 head,
-        uint32 eyes,
-        uint32 mouth,
-        uint32 body,
-        uint32 hat,
-        uint32 accessory,
+        bytes32 encryptedHead,
+        bytes32 encryptedEyes,
+        bytes32 encryptedMouth,
+        bytes32 encryptedBody,
+        bytes32 encryptedHat,
+        bytes32 encryptedAccessory,
         bool isPublic
     ) public returns (uint256) {
+        // Check that name is valid (not empty, not too long)
         require(bytes(name).length > 0 && bytes(name).length <= 50, "Invalid name length");
+        // All parts must be encrypted, empty hashes are not allowed
+        require(encryptedHead != bytes32(0), "FHE encrypted head cannot be empty");
+        require(encryptedEyes != bytes32(0), "FHE encrypted eyes cannot be empty");
+        require(encryptedMouth != bytes32(0), "FHE encrypted mouth cannot be empty");
+        require(encryptedBody != bytes32(0), "FHE encrypted body cannot be empty");
+        require(encryptedHat != bytes32(0), "FHE encrypted hat cannot be empty");
+        require(encryptedAccessory != bytes32(0), "FHE encrypted accessory cannot be empty");
         
+        // Generate new character ID
         uint256 characterId = _characterIdCounter++;
         
+        // Save character with all encrypted parts
         characters[characterId] = Character({
-            head: head,
-            eyes: eyes,
-            mouth: mouth,
-            body: body,
-            hat: hat,
-            accessory: accessory,
+            encryptedHead: encryptedHead,
+            encryptedEyes: encryptedEyes,
+            encryptedMouth: encryptedMouth,
+            encryptedBody: encryptedBody,
+            encryptedHat: encryptedHat,
+            encryptedAccessory: encryptedAccessory,
             name: name,
             owner: msg.sender,
             createdAt: block.timestamp,
@@ -105,10 +100,11 @@ contract CharacterManager {
             isPublic: isPublic
         });
         
+        // Add to owner's character list
         ownerCharacters[msg.sender].push(characterId);
         totalCharacters++;
         
-        // Add to gallery if public
+        // If public, add to gallery immediately
         if (isPublic && galleryManager != address(0)) {
             IGalleryManager(galleryManager).addToGallery(characterId);
         }
@@ -118,44 +114,38 @@ contract CharacterManager {
         return characterId;
     }
 
-    /**
-     * @dev Update character parts
-     * @param characterId Character ID to update
-     * @param head New head ID
-     * @param eyes New eyes ID
-     * @param mouth New mouth ID
-     * @param body New body ID
-     * @param hat New hat ID
-     * @param accessory New accessory ID
-     */
+    // Update character parts - only owner can do this
+    // All parts must be encrypted via FHE before calling
     function updateCharacter(
         uint256 characterId,
-        uint32 head,
-        uint32 eyes,
-        uint32 mouth,
-        uint32 body,
-        uint32 hat,
-        uint32 accessory
+        bytes32 encryptedHead,
+        bytes32 encryptedEyes,
+        bytes32 encryptedMouth,
+        bytes32 encryptedBody,
+        bytes32 encryptedHat,
+        bytes32 encryptedAccessory
     ) public {
         require(characters[characterId].owner == msg.sender, "Not the owner");
         require(characters[characterId].owner != address(0), "Character does not exist");
+        require(encryptedHead != bytes32(0), "FHE encrypted head cannot be empty");
+        require(encryptedEyes != bytes32(0), "FHE encrypted eyes cannot be empty");
+        require(encryptedMouth != bytes32(0), "FHE encrypted mouth cannot be empty");
+        require(encryptedBody != bytes32(0), "FHE encrypted body cannot be empty");
+        require(encryptedHat != bytes32(0), "FHE encrypted hat cannot be empty");
+        require(encryptedAccessory != bytes32(0), "FHE encrypted accessory cannot be empty");
         
-        characters[characterId].head = head;
-        characters[characterId].eyes = eyes;
-        characters[characterId].mouth = mouth;
-        characters[characterId].body = body;
-        characters[characterId].hat = hat;
-        characters[characterId].accessory = accessory;
+        characters[characterId].encryptedHead = encryptedHead;
+        characters[characterId].encryptedEyes = encryptedEyes;
+        characters[characterId].encryptedMouth = encryptedMouth;
+        characters[characterId].encryptedBody = encryptedBody;
+        characters[characterId].encryptedHat = encryptedHat;
+        characters[characterId].encryptedAccessory = encryptedAccessory;
         characters[characterId].updatedAt = block.timestamp;
         
         emit CharacterUpdated(characterId, msg.sender);
     }
 
-    /**
-     * @dev Change character name
-     * @param characterId Character ID
-     * @param newName New character name
-     */
+    // Change character name - simple, names are public anyway
     function changeCharacterName(
         uint256 characterId,
         string memory newName
@@ -169,20 +159,16 @@ contract CharacterManager {
         emit CharacterNameChanged(characterId, newName);
     }
 
-    /**
-     * @dev Delete a character
-     * @param characterId Character ID to delete
-     */
+    // Delete character - if it was public, remove from gallery first
     function deleteCharacter(uint256 characterId) public {
         require(characters[characterId].owner == msg.sender, "Not the owner");
         
-        // Check if character was public and remove from gallery before deleting
         bool wasPublic = characters[characterId].isPublic;
         if (wasPublic && galleryManager != address(0)) {
             IGalleryManager(galleryManager).removeFromGallery(characterId);
         }
         
-        // Remove from owner's list
+        // Remove from owner's character list (swap with last element and pop)
         uint256[] storage ownerChars = ownerCharacters[msg.sender];
         for (uint256 i = 0; i < ownerChars.length; i++) {
             if (ownerChars[i] == characterId) {
@@ -198,23 +184,16 @@ contract CharacterManager {
         emit CharacterDeleted(characterId, msg.sender);
     }
 
-    // Gallery manager address
+    // Gallery contract address - set once during deployment
     address public galleryManager;
 
-    /**
-     * @dev Set gallery manager address
-     * @param _galleryManager Gallery manager contract address
-     */
+    // Set gallery address (can only be set once)
     function setGalleryManager(address _galleryManager) public {
         require(galleryManager == address(0), "Gallery manager already set");
         galleryManager = _galleryManager;
     }
 
-    /**
-     * @dev Toggle character public visibility
-     * @param characterId Character ID
-     * @param isPublic New visibility status
-     */
+    // Toggle character visibility - make it public or private
     function setCharacterVisibility(
         uint256 characterId,
         bool isPublic
@@ -225,7 +204,7 @@ contract CharacterManager {
         characters[characterId].isPublic = isPublic;
         characters[characterId].updatedAt = block.timestamp;
         
-        // Notify gallery manager if visibility changed
+        // Update gallery if visibility changed
         if (galleryManager != address(0)) {
             if (isPublic && !wasPublic) {
                 IGalleryManager(galleryManager).addToGallery(characterId);
@@ -235,28 +214,15 @@ contract CharacterManager {
         }
     }
 
-    /**
-     * @dev Get character data
-     * @param characterId Character ID
-     * @return head Head ID
-     * @return eyes Eyes ID
-     * @return mouth Mouth ID
-     * @return body Body ID
-     * @return hat Hat ID
-     * @return accessory Accessory ID
-     * @return name Character name
-     * @return owner Character owner
-     * @return createdAt Creation timestamp
-     * @return updatedAt Last update timestamp
-     * @return isPublic Visibility status
-     */
+    // Get full character data including encrypted parts
+    // Only accessible by owner or if character is public
     function getCharacter(uint256 characterId) public view returns (
-        uint32 head,
-        uint32 eyes,
-        uint32 mouth,
-        uint32 body,
-        uint32 hat,
-        uint32 accessory,
+        bytes32 encryptedHead,
+        bytes32 encryptedEyes,
+        bytes32 encryptedMouth,
+        bytes32 encryptedBody,
+        bytes32 encryptedHat,
+        bytes32 encryptedAccessory,
         string memory name,
         address owner,
         uint256 createdAt,
@@ -268,12 +234,12 @@ contract CharacterManager {
         require(char.owner == msg.sender || char.isPublic, "Character is private");
         
         return (
-            char.head,
-            char.eyes,
-            char.mouth,
-            char.body,
-            char.hat,
-            char.accessory,
+            char.encryptedHead,
+            char.encryptedEyes,
+            char.encryptedMouth,
+            char.encryptedBody,
+            char.encryptedHat,
+            char.encryptedAccessory,
             char.name,
             char.owner,
             char.createdAt,
@@ -282,24 +248,12 @@ contract CharacterManager {
         );
     }
 
-    /**
-     * @dev Get owner's character IDs
-     * @param owner Address of the owner
-     * @return Array of character IDs
-     */
+    // Get all character IDs owned by an address
     function getOwnerCharacters(address owner) public view returns (uint256[] memory) {
         return ownerCharacters[owner];
     }
 
-    /**
-     * @dev Get character public info (name, owner, timestamps) without encrypted parts
-     * @param characterId Character ID
-     * @return name Character name
-     * @return owner Character owner
-     * @return createdAt Creation timestamp
-     * @return updatedAt Last update timestamp
-     * @return isPublic Visibility status
-     */
+    // Get public info only (no encrypted parts) - for gallery listings
     function getCharacterPublicInfo(uint256 characterId) public view returns (
         string memory name,
         address owner,
@@ -317,6 +271,29 @@ contract CharacterManager {
             char.createdAt,
             char.updatedAt,
             char.isPublic
+        );
+    }
+    
+    // Get just the encrypted parts - useful if you only need the handles
+    function getEncryptedCharacterParts(uint256 characterId) public view returns (
+        bytes32 encryptedHead,
+        bytes32 encryptedEyes,
+        bytes32 encryptedMouth,
+        bytes32 encryptedBody,
+        bytes32 encryptedHat,
+        bytes32 encryptedAccessory
+    ) {
+        Character storage char = characters[characterId];
+        require(char.owner != address(0), "Character does not exist");
+        require(char.owner == msg.sender || char.isPublic, "Character is private");
+        
+        return (
+            char.encryptedHead,
+            char.encryptedEyes,
+            char.encryptedMouth,
+            char.encryptedBody,
+            char.encryptedHat,
+            char.encryptedAccessory
         );
     }
 }

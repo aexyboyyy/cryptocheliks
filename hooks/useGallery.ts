@@ -83,11 +83,13 @@ export function useGallery() {
   useEffect(() => {
     if (likeError) {
       console.error("Like error:", likeError);
-      alert(`Transaction error: ${likeError.message || "Failed to send transaction"}`);
+      const errorMsg = likeError?.message || String(likeError) || "Failed to send transaction";
+      alert(`Transaction error: ${errorMsg}`);
     }
     if (likeTxError && likeReceiptError) {
       console.error("Like transaction receipt error:", likeReceiptError);
-      alert(`Transaction failed: ${likeReceiptError.message || "Transaction was rejected or failed"}`);
+      const errorMsg = likeReceiptError?.message || String(likeReceiptError) || "Transaction was rejected or failed";
+      alert(`Transaction failed: ${errorMsg}`);
     }
     if (likeSuccess) {
       // Refetch likes after successful like
@@ -110,10 +112,12 @@ export function useGallery() {
         abi: GALLERY_MANAGER_ABI,
         functionName: "likeCharacter",
         args: [BigInt(characterId)],
+        gas: 500000n, // Like operation doesn't need much gas
       });
     } catch (err: any) {
       console.error("Error calling writeContract:", err);
-      alert(`Error: ${err.message || "Failed to create transaction"}`);
+      const errorMsg = err?.message || String(err) || "Failed to create transaction";
+      alert(`Error: ${errorMsg}`);
     }
   };
 

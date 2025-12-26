@@ -8,10 +8,11 @@ import { ArrowLeft } from "lucide-react";
 import { CharacterBuilder } from "@/components/CharacterBuilder";
 import { parseAbi } from "viem";
 import { getCharacterManagerAddress } from "@/utils/address";
+import { initFHERelayer, encryptCharacterParts, setContractAddress, getOriginalCharacterParts, storeOriginalCharacterParts } from "@/lib/fheEncryption";
 
 const CHARACTER_MANAGER_ABI = parseAbi([
-  "function getCharacter(uint256 characterId) public view returns (uint32 head, uint32 eyes, uint32 mouth, uint32 body, uint32 hat, uint32 accessory, string memory name, address owner, uint256 createdAt, uint256 updatedAt, bool isPublic)",
-  "function updateCharacter(uint256 characterId, uint32 head, uint32 eyes, uint32 mouth, uint32 body, uint32 hat, uint32 accessory) public",
+  "function getCharacter(uint256 characterId) public view returns (bytes32 encryptedHead, bytes32 encryptedEyes, bytes32 encryptedMouth, bytes32 encryptedBody, bytes32 encryptedHat, bytes32 encryptedAccessory, string memory name, address owner, uint256 createdAt, uint256 updatedAt, bool isPublic)",
+  "function updateCharacter(uint256 characterId, bytes32 encryptedHead, bytes32 encryptedEyes, bytes32 encryptedMouth, bytes32 encryptedBody, bytes32 encryptedHat, bytes32 encryptedAccessory) public",
   "function changeCharacterName(uint256 characterId, string memory newName) public",
 ]);
 
@@ -30,8 +31,26 @@ export default function EditCharacterPage() {
     accessory: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [isRelayerReady, setIsRelayerReady] = useState(false);
+  const [isEncrypting, setIsEncrypting] = useState(false);
 
   const characterManagerAddress = getCharacterManagerAddress();
+
+  // Initialize FHE relayer on mount
+  useEffect(() => {
+    if (characterManagerAddress) {
+      setContractAddress(characterManagerAddress);
+      initFHERelayer(characterManagerAddress)
+        .then(() => {
+          setIsRelayerReady(true);
+          console.log("FHE relayer initialized");
+        })
+        .catch((error) => {
+          console.error("Failed to initialize FHE relayer:", error);
+          alert("Failed to initialize FHE encryption. Please refresh the page.");
+        });
+    }
+  }, [characterManagerAddress]);
 
   const { data: characterData } = useReadContract({
     address: characterManagerAddress || undefined,
@@ -50,40 +69,65 @@ export default function EditCharacterPage() {
   const { isSuccess: nameSuccess, isError: nameTxError, error: nameReceiptError } = useWaitForTransactionReceipt({ hash: nameHash });
 
   useEffect(() => {
-    if (characterData) {
-      const [head, eyes, mouth, body, hat, accessory, charName] = characterData as any;
-      setParts({
-        head: Number(head),
-        eyes: Number(eyes),
-        mouth: Number(mouth),
-        body: Number(body),
-        hat: Number(hat),
-        accessory: Number(accessory),
-      });
+    if (characterData && characterId >= 0) {
+      // Get original parts from localStorage (they're stored there when character was created/updated)
+      const originalParts = getOriginalCharacterParts(characterId);
+      
+      if (originalParts) {
+        // Use stored original parts for display
+        setParts(originalParts);
+      } else {
+        // Fallback to default values if not found (shouldn't happen, but handle gracefully)
+        setParts({
+          head: 0,
+          eyes: 0,
+          mouth: 0,
+          body: 0,
+          hat: 0,
+          accessory: 0,
+        });
+      }
+      
+      // Extract name from contract data (name is public, not encrypted)
+      const [, , , , , , charName] = characterData as any;
       setName(charName as string);
       setLoading(false);
     }
-  }, [characterData]);
+  }, [characterData, characterId]);
 
   // Handle errors
   useEffect(() => {
     if (updateError) {
       console.error("Update error:", updateError);
-      alert(`Transaction error: ${updateError.message || "Failed to send transaction"}`);
+      const errorMsg = updateError?.message || String(updateError) || "Failed to send transaction";
+      alert(`Transaction error: ${errorMsg}`);
     }
     if (nameError) {
       console.error("Name update error:", nameError);
-      alert(`Transaction error: ${nameError.message || "Failed to send transaction"}`);
+      const errorMsg = nameError?.message || String(nameError) || "Failed to send transaction";
+      alert(`Transaction error: ${errorMsg}`);
     }
     if (updateTxError && updateReceiptError) {
       console.error("Update transaction receipt error:", updateReceiptError);
-      alert(`Transaction failed: ${updateReceiptError.message || "Transaction was rejected or failed"}`);
+      const errorMsg = updateReceiptError?.message || String(updateReceiptError) || "Transaction was rejected or failed";
+      alert(`Transaction failed: ${errorMsg}`);
     }
     if (nameTxError && nameReceiptError) {
       console.error("Name transaction receipt error:", nameReceiptError);
-      alert(`Transaction failed: ${nameReceiptError.message || "Transaction was rejected or failed"}`);
+      const errorMsg = nameReceiptError?.message || String(nameReceiptError) || "Transaction was rejected or failed";
+      alert(`Transaction failed: ${errorMsg}`);
     }
   }, [updateError, nameError, updateTxError, updateReceiptError, nameTxError, nameReceiptError]);
+
+  // Handle successful update - store original parts
+  useEffect(() => {
+    if (updateSuccess) {
+      console.log("Character update successful!");
+      // Store updated parts in localStorage
+      storeOriginalCharacterParts(characterId, parts);
+      console.log("Updated character parts stored for characterId:", characterId);
+    }
+  }, [updateSuccess, characterId, parts]);
 
   // Redirect on success
   useEffect(() => {
@@ -106,6 +150,16 @@ export default function EditCharacterPage() {
       return;
     }
 
+    if (!address) {
+      alert("Wallet address not available");
+      return;
+    }
+
+    if (!isRelayerReady) {
+      alert("FHE encryption is not ready yet. Please wait a moment and try again.");
+      return;
+    }
+
     // Reset errors
     resetUpdate();
     resetName();
@@ -116,29 +170,34 @@ export default function EditCharacterPage() {
       name,
     });
 
-    try {
-      if (!characterManagerAddress) {
-        alert("Character manager address not configured");
-        return;
-      }
+    setIsEncrypting(true);
 
-      // Update character parts
+    try {
+      // Encrypt character parts using FHE
+      console.log("Encrypting character parts for update...");
+      const encryptedParts = await encryptCharacterParts(parts, address, characterManagerAddress);
+      console.log("Character parts encrypted:", encryptedParts);
+
+      setIsEncrypting(false);
+
+      // Update character parts with encrypted values
       updateChar({
         address: characterManagerAddress,
         abi: CHARACTER_MANAGER_ABI,
         functionName: "updateCharacter",
         args: [
           BigInt(characterId),
-          Number(parts.head),
-          Number(parts.eyes),
-          Number(parts.mouth),
-          Number(parts.body),
-          Number(parts.hat),
-          Number(parts.accessory),
-        ],
+          encryptedParts.encryptedHead as `0x${string}`,
+          encryptedParts.encryptedEyes as `0x${string}`,
+          encryptedParts.encryptedMouth as `0x${string}`,
+          encryptedParts.encryptedBody as `0x${string}`,
+          encryptedParts.encryptedHat as `0x${string}`,
+          encryptedParts.encryptedAccessory as `0x${string}`,
+        ] as const,
+        gas: 10000000n, // Limit gas to 10M (under the 16.7M cap)
       });
 
-      // Update name if changed
+      // Update name if changed (name is public, no encryption needed)
       const currentName = characterData ? (characterData as any)[6] : "";
       if (name !== currentName) {
         updateName({
@@ -146,11 +205,14 @@ export default function EditCharacterPage() {
           abi: CHARACTER_MANAGER_ABI,
           functionName: "changeCharacterName",
           args: [BigInt(characterId), name],
+          gas: 500000n, // Name change doesn't need much gas
         });
       }
     } catch (error: any) {
-      console.error("Error calling writeContract:", error);
-      alert(`Error: ${error.message || "Failed to create transaction"}`);
+      console.error("Error encrypting or calling writeContract:", error);
+      setIsEncrypting(false);
+      const errorMsg = error?.message || String(error) || "Failed to encrypt or create transaction";
+      alert(`Error: ${errorMsg}`);
     }
   };
 
@@ -217,17 +279,17 @@ export default function EditCharacterPage() {
           {(updateError || nameError || updateReceiptError || nameReceiptError) && (
             <div className="mt-4 p-4 bg-red-900/50 rounded-lg text-red-200">
               <p className="font-semibold">Error:</p>
-              <p className="text-sm">{updateError?.message || nameError?.message || updateReceiptError?.message || nameReceiptError?.message || "Transaction failed"}</p>
+              <p className="text-sm">{updateError?.message || nameError?.message || updateReceiptError?.message || nameReceiptError?.message || String(updateError || nameError || updateReceiptError || nameReceiptError) || "Transaction failed"}</p>
             </div>
           )}
 
           <div className="mt-8 flex gap-4">
             <button
               onClick={handleUpdate}
-              disabled={!name.trim() || isUpdating || isUpdatingName || !characterManagerAddress || characterManagerAddress.length === 0}
+              disabled={!name.trim() || isUpdating || isUpdatingName || isEncrypting || !isRelayerReady || !characterManagerAddress || characterManagerAddress.length === 0}
               className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold transition-colors"
             >
-              {isUpdating ? "Preparing update..." : isUpdatingName ? "Updating name..." : (updateSuccess || nameSuccess) ? "Success! Redirecting..." : "Update Character"}
+              {isEncrypting ? "Encrypting..." : isUpdating ? "Preparing update..." : isUpdatingName ? "Updating name..." : (updateSuccess || nameSuccess) ? "Success! Redirecting..." : "Update Character"}
             </button>
             <button
               onClick={() => router.back()}

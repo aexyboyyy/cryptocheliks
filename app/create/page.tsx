@@ -1,18 +1,20 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useAccount, useDisconnect } from "wagmi";
+import { useAccount, useDisconnect, usePublicClient } from "wagmi";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, LogOut } from "lucide-react";
 import { CharacterBuilder } from "@/components/CharacterBuilder";
 import { useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { parseAbi } from "viem";
+import { parseAbi, decodeEventLog } from "viem";
 import { ConnectKitButton } from "connectkit";
 import { getCharacterManagerAddress } from "@/utils/address";
+import { initFHERelayer, encryptCharacterParts, setContractAddress, storeOriginalCharacterParts } from "@/lib/fheEncryption";
 
 const CHARACTER_MANAGER_ABI = parseAbi([
-  "function createCharacter(string memory name, uint32 head, uint32 eyes, uint32 mouth, uint32 body, uint32 hat, uint32 accessory, bool isPublic) public returns (uint256)",
+  "function createCharacter(string memory name, bytes32 encryptedHead, bytes32 encryptedEyes, bytes32 encryptedMouth, bytes32 encryptedBody, bytes32 encryptedHat, bytes32 encryptedAccessory, bool isPublic) public returns (uint256)",
+  "event CharacterCreated(uint256 indexed characterId, address indexed owner, string name, bool isPublic)",
 ]);
 
 export default function CreatePage() {
@@ -31,11 +33,40 @@ export default function CreatePage() {
   });
 
   const characterManagerAddress = getCharacterManagerAddress();
+  
+  // Debug: log the address being used
+  useEffect(() => {
+    console.log('[CreatePage] CharacterManager address:', characterManagerAddress);
+    console.log('[CreatePage] Expected address from README: 0x892324719831df4CC0d3c4eAc5B4aBe1f17CAdea');
+    if (characterManagerAddress) {
+      console.log('[CreatePage] Addresses match:', characterManagerAddress.toLowerCase() === '0x892324719831df4cc0d3c4eac5b4abe1f17cadea');
+    }
+  }, [characterManagerAddress]);
+  const [isRelayerReady, setIsRelayerReady] = useState(false);
+  const [isEncrypting, setIsEncrypting] = useState(false);
+  const [createdParts, setCreatedParts] = useState<typeof parts | null>(null);
+  const publicClient = usePublicClient();
 
   const { writeContract, data: hash, isPending, error: writeError, reset } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess, isError: txError, error: receiptError } = useWaitForTransactionReceipt({
+  const { isLoading: isConfirming, isSuccess, isError: txError, error: receiptError, data: receipt } = useWaitForTransactionReceipt({
     hash,
   });
+
+  // Initialize FHE relayer on mount
+  useEffect(() => {
+    if (characterManagerAddress) {
+      setContractAddress(characterManagerAddress);
+      initFHERelayer(characterManagerAddress)
+        .then(() => {
+          setIsRelayerReady(true);
+          console.log("FHE relayer initialized");
+        })
+        .catch((error) => {
+          console.error("Failed to initialize FHE relayer:", error);
+          alert("Failed to initialize FHE encryption. Please refresh the page.");
+        });
+    }
+  }, [characterManagerAddress]);
 
   const handleCreate = async () => {
     if (!isConnected || !name.trim()) {
@@ -49,40 +80,96 @@ export default function CreatePage() {
       return;
     }
 
+    if (!address) {
+      alert("Wallet address not available");
+      return;
+    }
+
+    if (!isRelayerReady) {
+      alert("FHE encryption is not ready yet. Please wait a moment and try again.");
+      return;
+    }
+
     // Reset any previous errors
     reset();
 
-    console.log("Creating character with:", {
-      address: characterManagerAddress,
-      name,
-      parts,
-      isPublic,
-    });
+    setIsEncrypting(true);
 
     try {
-      if (!characterManagerAddress) {
-        alert("Character manager address not configured");
-        return;
+      // Save parts for later storage (before encryption so we have the original values)
+      setCreatedParts({ ...parts });
+      
+      // Encrypt character parts using FHE
+      console.log("Encrypting character parts...");
+      const encryptedParts = await encryptCharacterParts(parts, address, characterManagerAddress);
+      
+      // Debug: verify all values are exactly 66 chars
+      console.log("Character parts encrypted:", encryptedParts);
+      Object.entries(encryptedParts).forEach(([key, value]) => {
+        if (typeof value === 'string') {
+          console.log(`${key}: length=${value.length}, value=${value}`);
+          if (value.length !== 66) {
+            console.error(`ERROR: ${key} is ${value.length} chars, expected 66!`);
+          }
+        }
+      });
+
+      setIsEncrypting(false);
+
+      // Validate name before sending
+      const trimmedName = name.trim();
+      if (!trimmedName || trimmedName.length === 0) {
+        throw new Error("Character name cannot be empty");
+      }
+      if (trimmedName.length > 50) {
+        throw new Error(`Character name is too long: ${trimmedName.length} characters (max 50)`);
+      }
+
+      // Prepare args with explicit validation
+      const args = [
+        trimmedName,
+        encryptedParts.encryptedHead as `0x${string}`,
+        encryptedParts.encryptedEyes as `0x${string}`,
+        encryptedParts.encryptedMouth as `0x${string}`,
+        encryptedParts.encryptedBody as `0x${string}`,
+        encryptedParts.encryptedHat as `0x${string}`,
+        encryptedParts.encryptedAccessory as `0x${string}`,
+        isPublic,
+      ] as const;
+
+      console.log("Calling createCharacter with args:", {
+        contractAddress: characterManagerAddress,
+        expectedAddress: '0x892324719831df4cc0d3c4eac5b4abe1f17cadea',
+        addressMatches: characterManagerAddress?.toLowerCase() === '0x892324719831df4cc0d3c4eac5b4abe1f17cadea',
+        name: args[0],
+        nameLength: args[0].length,
+        nameBytes: new TextEncoder().encode(args[0]).length,
+        encryptedHead: args[1],
+        encryptedHeadLength: args[1].length,
+        encryptedHeadIsZero: args[1] === '0x0000000000000000000000000000000000000000000000000000000000000000',
+        isPublic: args[7]
+      });
+
+      // Final validation: ensure we're using the correct contract address
+      const expectedAddress = '0x892324719831df4cc0d3c4eac5b4abe1f17cadea';
+      if (!characterManagerAddress || characterManagerAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
+        const errorMsg = `Wrong contract address! Using: ${characterManagerAddress}, Expected: ${expectedAddress}`;
+        console.error('[handleCreate]', errorMsg);
+        throw new Error(errorMsg);
       }
 
       writeContract({
         address: characterManagerAddress,
         abi: CHARACTER_MANAGER_ABI,
         functionName: "createCharacter",
-        args: [
-          name,
-          Number(parts.head),
-          Number(parts.eyes),
-          Number(parts.mouth),
-          Number(parts.body),
-          Number(parts.hat),
-          Number(parts.accessory),
-          isPublic,
-        ],
+        args,
+        gas: 10000000n, // Limit gas to 10M (under the 16.7M cap)
       });
     } catch (error: any) {
-      console.error("Error calling writeContract:", error);
-      alert(`Error: ${error.message || "Failed to create transaction"}`);
+      console.error("Error encrypting or calling writeContract:", error);
+      setIsEncrypting(false);
+      const errorMsg = error?.message || String(error) || "Failed to encrypt or create transaction";
+      alert(`Error: ${errorMsg}`);
     }
   };
 
@@ -90,23 +177,73 @@ export default function CreatePage() {
   useEffect(() => {
     if (writeError) {
       console.error("Write error:", writeError);
-      alert(`Transaction error: ${writeError.message || "Failed to send transaction"}`);
+      const errorMsg = writeError?.message || String(writeError) || "Failed to send transaction";
+      alert(`Transaction error: ${errorMsg}`);
     }
     if (txError && receiptError) {
       console.error("Transaction receipt error:", receiptError);
-      alert(`Transaction failed: ${receiptError.message || "Transaction was rejected or failed"}`);
+      const errorMsg = receiptError?.message || String(receiptError) || "Transaction was rejected or failed";
+      alert(`Transaction failed: ${errorMsg}`);
     }
   }, [writeError, txError, receiptError]);
 
-  // Redirect on success
+  // Handle successful character creation - parse event and store original parts
   useEffect(() => {
-    if (isSuccess && hash) {
-      console.log("Transaction successful! Hash:", hash);
-      setTimeout(() => {
-        router.push("/my-characters");
-      }, 1000);
+    async function handleCharacterCreated() {
+      if (isSuccess && receipt && characterManagerAddress && createdParts) {
+        try {
+          // Filter logs by contract address and parse CharacterCreated event
+          const contractLogs = receipt.logs.filter(
+            (log: any) => log.address.toLowerCase() === characterManagerAddress.toLowerCase()
+          );
+          
+          const characterCreatedEvent = contractLogs.find((log: any) => {
+            try {
+              const decoded = decodeEventLog({
+                abi: CHARACTER_MANAGER_ABI,
+                data: log.data,
+                topics: log.topics,
+              });
+              return decoded.eventName === 'CharacterCreated';
+            } catch {
+              return false;
+            }
+          });
+
+          if (characterCreatedEvent) {
+            const decoded = decodeEventLog({
+              abi: CHARACTER_MANAGER_ABI,
+              data: characterCreatedEvent.data,
+              topics: characterCreatedEvent.topics,
+            }) as any;
+            
+            const characterId = Number(decoded.args.characterId);
+            console.log("Character created with ID:", characterId);
+            
+            // Store original parts with the characterId
+            storeOriginalCharacterParts(characterId, createdParts);
+            console.log("Original character parts stored for characterId:", characterId);
+            setCreatedParts(null); // Clear after storing
+          } else {
+            console.warn("CharacterCreated event not found in receipt");
+          }
+          
+          // Redirect after a short delay
+          setTimeout(() => {
+            router.push("/my-characters");
+          }, 1000);
+        } catch (error) {
+          console.error("Error parsing character creation event:", error);
+          // Still redirect even if event parsing fails
+          setTimeout(() => {
+            router.push("/my-characters");
+          }, 1000);
+        }
+      }
     }
-  }, [isSuccess, hash, router]);
+    
+    handleCharacterCreated();
+  }, [isSuccess, receipt, characterManagerAddress, createdParts, router]);
 
   if (!isConnected && !isConnecting) {
     return (
@@ -189,17 +326,17 @@ export default function CreatePage() {
           {(writeError || receiptError) && (
             <div className="mt-4 p-4 bg-red-900/50 rounded-lg text-red-200">
               <p className="font-semibold">Error:</p>
-              <p className="text-sm">{writeError?.message || receiptError?.message || "Transaction failed"}</p>
+              <p className="text-sm">{writeError?.message || receiptError?.message || String(writeError || receiptError) || "Transaction failed"}</p>
             </div>
           )}
 
           <div className="mt-8 flex gap-4">
             <button
               onClick={handleCreate}
-              disabled={!name.trim() || isPending || isConfirming || !characterManagerAddress}
+              disabled={!name.trim() || isPending || isConfirming || !characterManagerAddress || !isRelayerReady || isEncrypting}
               className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold transition-colors"
             >
-              {isPending ? "Preparing transaction..." : isConfirming ? "Confirming transaction..." : isSuccess ? "Success! Redirecting..." : "Create Character"}
+              {!isRelayerReady ? "Initializing FHE..." : isEncrypting ? "Encrypting..." : isPending ? "Preparing transaction..." : isConfirming ? "Confirming transaction..." : isSuccess ? "Success! Redirecting..." : "Create Character"}
             </button>
             <button
               onClick={() => router.back()}

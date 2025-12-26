@@ -14,10 +14,10 @@ import { useCharacter } from "@/hooks/useCharacter";
 const CHARACTER_MANAGER_ABI = parseAbi([
   "function getOwnerCharacters(address owner) public view returns (uint256[])",
   "function getCharacterPublicInfo(uint256 characterId) public view returns (string memory name, address owner, uint256 createdAt, uint256 updatedAt, bool isPublic)",
-  "function getCharacter(uint256 characterId) public view returns (uint32 head, uint32 eyes, uint32 mouth, uint32 body, uint32 hat, uint32 accessory, string memory name, address owner, uint256 createdAt, uint256 updatedAt, bool isPublic)",
+  "function getCharacter(uint256 characterId) public view returns (bytes32 encryptedHead, bytes32 encryptedEyes, bytes32 encryptedMouth, bytes32 encryptedBody, bytes32 encryptedHat, bytes32 encryptedAccessory, string memory name, address owner, uint256 createdAt, uint256 updatedAt, bool isPublic)",
   "function deleteCharacter(uint256 characterId) public",
   "function setCharacterVisibility(uint256 characterId, bool isPublic) public",
-  "function updateCharacter(uint256 characterId, uint32 head, uint32 eyes, uint32 mouth, uint32 body, uint32 hat, uint32 accessory) public",
+  "function updateCharacter(uint256 characterId, bytes32 encryptedHead, bytes32 encryptedEyes, bytes32 encryptedMouth, bytes32 encryptedBody, bytes32 encryptedHat, bytes32 encryptedAccessory) public",
   "function changeCharacterName(uint256 characterId, string memory newName) public",
 ]);
 
@@ -78,19 +78,23 @@ export default function MyCharactersPage() {
   useEffect(() => {
     if (deleteError) {
       console.error("Delete error:", deleteError);
-      alert(`Transaction error: ${deleteError.message || "Failed to send transaction"}`);
+      const errorMsg = deleteError?.message || String(deleteError) || "Failed to send transaction";
+      alert(`Transaction error: ${errorMsg}`);
     }
     if (visibilityError) {
       console.error("Visibility error:", visibilityError);
-      alert(`Transaction error: ${visibilityError.message || "Failed to send transaction"}`);
+      const errorMsg = visibilityError?.message || String(visibilityError) || "Failed to send transaction";
+      alert(`Transaction error: ${errorMsg}`);
     }
     if (deleteTxError && deleteReceiptError) {
       console.error("Delete transaction receipt error:", deleteReceiptError);
-      alert(`Transaction failed: ${deleteReceiptError.message || "Transaction was rejected or failed"}`);
+      const errorMsg = deleteReceiptError?.message || String(deleteReceiptError) || "Transaction was rejected or failed";
+      alert(`Transaction failed: ${errorMsg}`);
     }
     if (visibilityTxError && visibilityReceiptError) {
       console.error("Visibility transaction receipt error:", visibilityReceiptError);
-      alert(`Transaction failed: ${visibilityReceiptError.message || "Transaction was rejected or failed"}`);
+      const errorMsg = visibilityReceiptError?.message || String(visibilityReceiptError) || "Transaction was rejected or failed";
+      alert(`Transaction failed: ${errorMsg}`);
     }
   }, [deleteError, visibilityError, deleteTxError, deleteReceiptError, visibilityTxError, visibilityReceiptError]);
 
@@ -119,6 +123,7 @@ export default function MyCharactersPage() {
           abi: CHARACTER_MANAGER_ABI,
           functionName: "setCharacterVisibility",
           args: [BigInt(pendingId), true],
+          gas: 1000000n, // Visibility toggle doesn't need much gas
         });
         (window as any).pendingGalleryAdd = undefined;
       }
@@ -139,6 +144,7 @@ export default function MyCharactersPage() {
       abi: CHARACTER_MANAGER_ABI,
       functionName: "deleteCharacter",
       args: [BigInt(characterId)],
+      gas: 1000000n, // Delete operation doesn't need much gas
     });
   };
 
@@ -154,6 +160,7 @@ export default function MyCharactersPage() {
       abi: CHARACTER_MANAGER_ABI,
       functionName: "setCharacterVisibility",
       args: [BigInt(characterId), !currentVisibility],
+      gas: 1000000n, // Visibility toggle doesn't need much gas
     });
   };
 
@@ -176,6 +183,7 @@ export default function MyCharactersPage() {
         abi: CHARACTER_MANAGER_ABI,
         functionName: "setCharacterVisibility",
         args: [BigInt(characterId), false],
+        gas: 1000000n, // Visibility toggle doesn't need much gas
       });
     } else {
       // Character is private - just make it public (this will automatically add to gallery)
