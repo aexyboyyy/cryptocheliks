@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
+
+import {FHE, euint32, externalEuint32} from "@fhevm/solidity/lib/FHE.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 // Gallery contract interface - we call it to add/remove characters from public gallery
 interface IGalleryManager {
@@ -9,15 +12,15 @@ interface IGalleryManager {
 
 // Character manager - stores pixel characters with FHE encryption
 // All visual parts are encrypted, only the name is public
-contract CharacterManager {
-    // Character structure - all parts encrypted with FHE
+contract CharacterManager is ZamaEthereumConfig {
+    // Character structure - all parts encrypted with FHE (euint32 with ACL support)
     struct Character {
-        bytes32 encryptedHead;      // Encrypted head (you can't see what it actually is until decrypted)
-        bytes32 encryptedEyes;      // Encrypted eyes
-        bytes32 encryptedMouth;     // Encrypted mouth
-        bytes32 encryptedBody;      // Encrypted body
-        bytes32 encryptedHat;       // Encrypted hat (yes, even hats get encrypted!)
-        bytes32 encryptedAccessory; // Encrypted accessory
+        euint32 encryptedHead;      // Encrypted head with ACL support
+        euint32 encryptedEyes;      // Encrypted eyes with ACL support
+        euint32 encryptedMouth;     // Encrypted mouth with ACL support
+        euint32 encryptedBody;      // Encrypted body with ACL support
+        euint32 encryptedHat;       // Encrypted hat with ACL support
+        euint32 encryptedAccessory; // Encrypted accessory with ACL support
         string name;                // Character name - this is public, no need to encrypt
         address owner;              // Who owns this character
         uint256 createdAt;          // When it was created
@@ -64,35 +67,48 @@ contract CharacterManager {
     // We only accept encrypted data, no plaintext!
     function createCharacter(
         string memory name,
-        bytes32 encryptedHead,
-        bytes32 encryptedEyes,
-        bytes32 encryptedMouth,
-        bytes32 encryptedBody,
-        bytes32 encryptedHat,
-        bytes32 encryptedAccessory,
+        externalEuint32 encryptedHead,
+        externalEuint32 encryptedEyes,
+        externalEuint32 encryptedMouth,
+        externalEuint32 encryptedBody,
+        externalEuint32 encryptedHat,
+        externalEuint32 encryptedAccessory,
+        bytes calldata inputProof,
         bool isPublic
     ) public returns (uint256) {
         // Check that name is valid (not empty, not too long)
         require(bytes(name).length > 0 && bytes(name).length <= 50, "Invalid name length");
-        // All parts must be encrypted, empty hashes are not allowed
-        require(encryptedHead != bytes32(0), "FHE encrypted head cannot be empty");
-        require(encryptedEyes != bytes32(0), "FHE encrypted eyes cannot be empty");
-        require(encryptedMouth != bytes32(0), "FHE encrypted mouth cannot be empty");
-        require(encryptedBody != bytes32(0), "FHE encrypted body cannot be empty");
-        require(encryptedHat != bytes32(0), "FHE encrypted hat cannot be empty");
-        require(encryptedAccessory != bytes32(0), "FHE encrypted accessory cannot be empty");
         
         // Generate new character ID
         uint256 characterId = _characterIdCounter++;
         
+        // Convert external encrypted values to euint32 and set ACL
+        euint32 head = FHE.fromExternal(encryptedHead, inputProof);
+        FHE.allow(head, msg.sender);
+        
+        euint32 eyes = FHE.fromExternal(encryptedEyes, inputProof);
+        FHE.allow(eyes, msg.sender);
+        
+        euint32 mouth = FHE.fromExternal(encryptedMouth, inputProof);
+        FHE.allow(mouth, msg.sender);
+        
+        euint32 body = FHE.fromExternal(encryptedBody, inputProof);
+        FHE.allow(body, msg.sender);
+        
+        euint32 hat = FHE.fromExternal(encryptedHat, inputProof);
+        FHE.allow(hat, msg.sender);
+        
+        euint32 accessory = FHE.fromExternal(encryptedAccessory, inputProof);
+        FHE.allow(accessory, msg.sender);
+        
         // Save character with all encrypted parts
         characters[characterId] = Character({
-            encryptedHead: encryptedHead,
-            encryptedEyes: encryptedEyes,
-            encryptedMouth: encryptedMouth,
-            encryptedBody: encryptedBody,
-            encryptedHat: encryptedHat,
-            encryptedAccessory: encryptedAccessory,
+            encryptedHead: head,
+            encryptedEyes: eyes,
+            encryptedMouth: mouth,
+            encryptedBody: body,
+            encryptedHat: hat,
+            encryptedAccessory: accessory,
             name: name,
             owner: msg.sender,
             createdAt: block.timestamp,
@@ -118,28 +134,42 @@ contract CharacterManager {
     // All parts must be encrypted via FHE before calling
     function updateCharacter(
         uint256 characterId,
-        bytes32 encryptedHead,
-        bytes32 encryptedEyes,
-        bytes32 encryptedMouth,
-        bytes32 encryptedBody,
-        bytes32 encryptedHat,
-        bytes32 encryptedAccessory
+        externalEuint32 encryptedHead,
+        externalEuint32 encryptedEyes,
+        externalEuint32 encryptedMouth,
+        externalEuint32 encryptedBody,
+        externalEuint32 encryptedHat,
+        externalEuint32 encryptedAccessory,
+        bytes calldata inputProof
     ) public {
         require(characters[characterId].owner == msg.sender, "Not the owner");
         require(characters[characterId].owner != address(0), "Character does not exist");
-        require(encryptedHead != bytes32(0), "FHE encrypted head cannot be empty");
-        require(encryptedEyes != bytes32(0), "FHE encrypted eyes cannot be empty");
-        require(encryptedMouth != bytes32(0), "FHE encrypted mouth cannot be empty");
-        require(encryptedBody != bytes32(0), "FHE encrypted body cannot be empty");
-        require(encryptedHat != bytes32(0), "FHE encrypted hat cannot be empty");
-        require(encryptedAccessory != bytes32(0), "FHE encrypted accessory cannot be empty");
         
-        characters[characterId].encryptedHead = encryptedHead;
-        characters[characterId].encryptedEyes = encryptedEyes;
-        characters[characterId].encryptedMouth = encryptedMouth;
-        characters[characterId].encryptedBody = encryptedBody;
-        characters[characterId].encryptedHat = encryptedHat;
-        characters[characterId].encryptedAccessory = encryptedAccessory;
+        // Convert external encrypted values to euint32 and set ACL
+        euint32 head = FHE.fromExternal(encryptedHead, inputProof);
+        FHE.allow(head, msg.sender);
+        
+        euint32 eyes = FHE.fromExternal(encryptedEyes, inputProof);
+        FHE.allow(eyes, msg.sender);
+        
+        euint32 mouth = FHE.fromExternal(encryptedMouth, inputProof);
+        FHE.allow(mouth, msg.sender);
+        
+        euint32 body = FHE.fromExternal(encryptedBody, inputProof);
+        FHE.allow(body, msg.sender);
+        
+        euint32 hat = FHE.fromExternal(encryptedHat, inputProof);
+        FHE.allow(hat, msg.sender);
+        
+        euint32 accessory = FHE.fromExternal(encryptedAccessory, inputProof);
+        FHE.allow(accessory, msg.sender);
+        
+        characters[characterId].encryptedHead = head;
+        characters[characterId].encryptedEyes = eyes;
+        characters[characterId].encryptedMouth = mouth;
+        characters[characterId].encryptedBody = body;
+        characters[characterId].encryptedHat = hat;
+        characters[characterId].encryptedAccessory = accessory;
         characters[characterId].updatedAt = block.timestamp;
         
         emit CharacterUpdated(characterId, msg.sender);
@@ -217,12 +247,12 @@ contract CharacterManager {
     // Get full character data including encrypted parts
     // Only accessible by owner or if character is public
     function getCharacter(uint256 characterId) public view returns (
-        bytes32 encryptedHead,
-        bytes32 encryptedEyes,
-        bytes32 encryptedMouth,
-        bytes32 encryptedBody,
-        bytes32 encryptedHat,
-        bytes32 encryptedAccessory,
+        euint32 encryptedHead,
+        euint32 encryptedEyes,
+        euint32 encryptedMouth,
+        euint32 encryptedBody,
+        euint32 encryptedHat,
+        euint32 encryptedAccessory,
         string memory name,
         address owner,
         uint256 createdAt,
@@ -276,12 +306,12 @@ contract CharacterManager {
     
     // Get just the encrypted parts - useful if you only need the handles
     function getEncryptedCharacterParts(uint256 characterId) public view returns (
-        bytes32 encryptedHead,
-        bytes32 encryptedEyes,
-        bytes32 encryptedMouth,
-        bytes32 encryptedBody,
-        bytes32 encryptedHat,
-        bytes32 encryptedAccessory
+        euint32 encryptedHead,
+        euint32 encryptedEyes,
+        euint32 encryptedMouth,
+        euint32 encryptedBody,
+        euint32 encryptedHat,
+        euint32 encryptedAccessory
     ) {
         Character storage char = characters[characterId];
         require(char.owner != address(0), "Character does not exist");
